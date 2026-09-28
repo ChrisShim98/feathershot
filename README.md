@@ -108,13 +108,3 @@ feathershot/
   scripts/            Build tooling - web export, MSBuild packaging, local install, icon/sound generation
   docs/               requirements.md (source of truth), mvp-status.md (build log), store-submission.md
 ```
-
-## Before you push
-
-`web/` currently has its **own nested `.git`** (from the original `create-next-app` scaffold). Remove it
-before committing at the repo root, or Git will treat `web/` as an embedded repo and silently skip
-everything inside it:
-
-```bash
-rm -rf web/.git
-```
