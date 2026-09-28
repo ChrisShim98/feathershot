@@ -1,0 +1,17 @@
+{
+  "name": "feathershot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Feathershot - screenshot beautifier for Windows (Next.js + WinUI 3 shell)",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "build:shell": "node scripts/build-shell.mjs",
+    "package": "npm run build:web && node scripts/build-shell.mjs --package",
+    "package:store": "npm run build:web && node scripts/build-shell.mjs --store",
+    "gen-sounds": "node scripts/gen-sounds.mjs",
+    "test": "npm --prefix web test",
+    "gen-icons": "node scripts/gen-icons.mjs",
+    "gen-local": "npm run package && node scripts/install-local.mjs"
+  }
+}

@@ -1,0 +1,12 @@
+# build output
+bin/
+obj/
+.vs/
+AppPackages/
+BundleArtifacts/
+web/out/
+shell/Assets/web/
+node_modules/
+*.user
+*.pfx
+dist/

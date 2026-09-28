@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Feathershot (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Feathershot (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
