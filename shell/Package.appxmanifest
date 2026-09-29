@@ -12,7 +12,7 @@
   <Identity
     Name="ChristopherShim.Feathershot"
     Publisher="CN=793116DF-0464-46D0-AC72-104D05CB9BA4"
-    Version="1.0.0.0" />
+    Version="1.0.1.0" />
 
   <mp:PhoneIdentity PhoneProductId="e3896cce-9bf6-40a5-bdaa-f3e2ffdccdc7" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 

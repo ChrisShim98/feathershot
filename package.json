@@ -1,6 +1,6 @@
 {
   "name": "feathershot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Feathershot - screenshot beautifier for Windows (Next.js + WinUI 3 shell)",
   "scripts": {
