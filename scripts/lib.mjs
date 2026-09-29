@@ -21,7 +21,10 @@ export function powershell(cmd) {
  * delete a running exe's files, and the app is normally still sitting in the tray from the last run.
  */
 export function cleanDist() {
-  powershell("Stop-Process -Name Feathershot -Force -ErrorAction SilentlyContinue");
+  // `-ErrorAction SilentlyContinue` suppresses the "no such process" error message, but powershell.exe
+  // still exits 1 when Stop-Process sets $? to false internally - `exit 0` forces a clean exit code so
+  // this doesn't look like a real failure when Feathershot just isn't running yet (e.g. a fresh clone).
+  powershell("Stop-Process -Name Feathershot -Force -ErrorAction SilentlyContinue; exit 0");
   const dist = join(root, "dist");
   if (!existsSync(dist)) return;
   for (const name of readdirSync(dist)) {

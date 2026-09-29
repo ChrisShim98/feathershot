@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, animate, motion, useReducedMotion } from "motion/react";
-import { Check, ClipboardCopy, Download, Droplets, FolderOpen, GripVertical, Grid2x2, Highlighter, ImagePlus, MousePointer2, Plus, Settings as SettingsIcon, Sparkles, Square, Undo2, X } from "lucide-react";
+import { Check, ClipboardCopy, Download, Droplets, FolderOpen, GripVertical, Grid2x2, Highlighter, ImagePlus, MousePointer2, Plus, Settings as SettingsIcon, Sparkles, Square, Type, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bird } from "./Bird";
 import { TitleBar, ThemeToggle, TITLEBAR_H } from "./chrome";
@@ -17,7 +17,7 @@ import { DEFAULT_STYLE, type Align, type CanvasPreset, type FrameKind, type Layo
 import { DEFAULT_SETTINGS, getShell, type Settings } from "@/lib/shell";
 import { sounds } from "@/lib/sounds";
 
-type Tool = "none" | "blur" | "pixelate" | "box" | "highlight";
+type Tool = "none" | "blur" | "pixelate" | "box" | "highlight" | "text";
 
 /** Classic marker colours, at the opacity a real highlighter lays down. */
 const HIGHLIGHT_COLORS = [
@@ -27,6 +27,34 @@ const HIGHLIGHT_COLORS = [
   { name: "Blue", hex: "#7cc9ff" },
   { name: "Orange", hex: "#ffb066" },
 ];
+
+/** Text tool colours: the two most useful neutrals plus a few accents. */
+const TEXT_COLORS = [
+  { name: "Ink", hex: "#1f1b2e" },
+  { name: "White", hex: "#ffffff" },
+  { name: "Red", hex: "#ef4444" },
+  { name: "Yellow", hex: "#facc15" },
+  { name: "Accent", hex: "#7c5cf0" },
+];
+
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
+
+// Text placement isn't reliable yet - hidden from the toolbar for the v1 Store submission.
+// Flip this back on for v2 once it's fixed; the tool itself (commitText, the input overlay, the
+// font-size/colour controls below) is left in place, just unreachable while this is false.
+const TEXT_TOOL_ENABLED = false;
+
+interface TextDraft {
+  /** Anchor point in source-image pixel space, where the first line's top-left lands. */
+  sx: number;
+  sy: number;
+  /** Screen position (relative to the stage) for the editing overlay. */
+  left: number;
+  top: number;
+  value: string;
+}
 
 const targets = (s: Style): Animated => ({ padding: s.padding, radius: s.radius, shadow: SHADOW_ORDER.indexOf(s.shadow) });
 const bgKey = (s: Style) => JSON.stringify(s.background);
@@ -51,6 +79,9 @@ interface RenderState {
   raf: number;
   tween: { stop: () => void } | null;
   bgTween: { stop: () => void } | null;
+  /** The un-zoomed "fit to stage" CSS size - the fixed viewport the zoomed canvas gets clipped to. */
+  fitW: number;
+  fitH: number;
 }
 
 /** Width of the floating style inspector. */
@@ -69,6 +100,10 @@ export default function Editor() {
   const [tool, setTool] = useState<Tool>("none");
   const [brush, setBrush] = useState(28);
   const [highlightColor, setHighlightColor] = useState(HIGHLIGHT_COLORS[0].hex);
+  const [fontSize, setFontSize] = useState(28);
+  const [textColor, setTextColor] = useState(TEXT_COLORS[0].hex);
+  const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
+  const [zoom, setZoomState] = useState(1);
   const [copy, setCopy] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [feathers, setFeathers] = useState<{ id: number; x: number; r: number }[]>([]);
   const [saveFmt, setSaveFmt] = useState<"png" | "jpg">("png");
@@ -86,6 +121,12 @@ export default function Editor() {
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const noteTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const strokeRef = useRef<{ last: { x: number; y: number }; dirty: boolean } | null>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const panDragRef = useRef<{ startClientX: number; startClientY: number; startPan: { x: number; y: number } } | null>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
 
   const R = useRef<RenderState>({
     style: DEFAULT_STYLE,
@@ -104,6 +145,8 @@ export default function Editor() {
     boxRect: null,
     undo: [],
     raf: 0,
+    fitW: 0,
+    fitH: 0,
     tween: null,
     bgTween: null,
   }).current;
@@ -130,13 +173,22 @@ export default function Editor() {
     R.raf = 0;
     const c = canvasRef.current;
     const stage = stageRef.current;
+    const wrap = wrapRef.current;
     const input = buildInput();
-    if (!c || !stage || !input) return;
+    if (!c || !stage || !wrap || !input) return;
     const layout = layoutFor(input);
     const fit = Math.min((stage.clientWidth - 56) / layout.canvasW, (stage.clientHeight - 56) / layout.canvasH, 1.5);
     const dpr = window.devicePixelRatio || 1;
-    const cssW = Math.max(1, layout.canvasW * fit);
-    const cssH = Math.max(1, layout.canvasH * fit);
+    // fitW/fitH is the un-zoomed viewport size - the wrapper is pinned to this so it stays put as the
+    // clip window while the canvas inside it grows. The canvas itself is sized (both CSS box and backing
+    // resolution) by fit * zoom together, so zooming in re-rasterizes at higher density instead of just
+    // stretching the same bitmap - that stretch is what made it look pixelated before.
+    R.fitW = Math.max(1, layout.canvasW * fit);
+    R.fitH = Math.max(1, layout.canvasH * fit);
+    wrap.style.width = `${R.fitW}px`;
+    wrap.style.height = `${R.fitH}px`;
+    const cssW = R.fitW * zoomRef.current;
+    const cssH = R.fitH * zoomRef.current;
     const pw = Math.max(1, Math.round(cssW * dpr));
     const ph = Math.max(1, Math.round(cssH * dpr));
     if (c.width !== pw || c.height !== ph) {
@@ -179,6 +231,42 @@ export default function Editor() {
     ro.observe(stage);
     return () => ro.disconnect();
   }, [schedule]);
+
+  // ------------------------------------------------------------------ zoom & pan
+  // Zooming in re-renders the canvas at a proportionally higher backing resolution (see draw()) rather
+  // than just CSS-stretching the "fit" bitmap, so it stays crisp instead of turning pixelated. The
+  // wrapper div is pinned to the un-zoomed "fit" size (R.fitW/fitH) and clips the now-larger canvas;
+  // panning is a plain translate on top, kept outside React state and written straight to the DOM.
+
+  const clampPan = useCallback((z: number, p: { x: number; y: number }) => {
+    const maxX = Math.max(0, (R.fitW * z - R.fitW) / 2);
+    const maxY = Math.max(0, (R.fitH * z - R.fitH) / 2);
+    return { x: Math.min(maxX, Math.max(-maxX, p.x)), y: Math.min(maxY, Math.max(-maxY, p.y)) };
+  }, [R]);
+
+  const applyTransform = useCallback(() => {
+    if (viewRef.current) viewRef.current.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px)`;
+  }, []);
+
+  const setZoom = useCallback(
+    (z: number) => {
+      const nz = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 4) / 4));
+      zoomRef.current = nz;
+      panRef.current = clampPan(nz, panRef.current);
+      setZoomState(nz);
+      applyTransform();
+      schedule();
+    },
+    [clampPan, applyTransform, schedule],
+  );
+
+  const resetView = useCallback(() => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    setZoomState(1);
+    applyTransform();
+    schedule();
+  }, [applyTransform, schedule]);
 
   // ------------------------------------------------------------------ style changes
 
@@ -279,6 +367,7 @@ export default function Editor() {
         setHasImage(true);
         setDims({ w: c.width, h: c.height });
         setCopy("idle");
+        resetView();
         // The Auto background blooms out from behind the screenshot.
         const target = startStyle ?? R.style;
         R.style = { ...target, background: { kind: "transparent" } };
@@ -290,7 +379,7 @@ export default function Editor() {
         sounds.play("error.soft");
       }
     },
-    [R, applyStyle, schedule, flash],
+    [R, applyStyle, schedule, flash, resetView],
   );
 
   // Boot: settings, environment, pending screenshot
@@ -408,6 +497,7 @@ export default function Editor() {
       const el = e.target as HTMLElement | null;
       const typing = el && (el.tagName === "INPUT" && (el as HTMLInputElement).type === "text");
       if (e.key === "Escape") {
+        if (textDraft) return setTextDraft(null);
         if (typing) return void el!.blur();
         void shell.closeEditor();
       } else if ((e.ctrlKey || e.metaKey) && !typing) {
@@ -419,7 +509,7 @@ export default function Editor() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doCopy, doSave, undo, shell]);
+  }, [doCopy, doSave, undo, shell, textDraft]);
 
   // Paste and drop
   useEffect(() => {
@@ -472,8 +562,52 @@ export default function Editor() {
     schedule();
   };
 
+  // ------------------------------------------------------------------ text tool
+
+  const committingText = useRef(false);
+
+  const commitText = () => {
+    const draft = textDraft;
+    setTextDraft(null);
+    const value = draft?.value.trim();
+    // Guards against the input's blur-on-unmount firing a second commit for the same draft
+    // (setTextDraft(null) above removes the <input>, which blurs it, which re-triggers onBlur).
+    if (!draft || !value || !R.src || !R.pixels || committingText.current) return;
+    committingText.current = true;
+    snapshot();
+    const ctx = R.src.getContext("2d")!;
+    // fontSize is chosen in on-screen pixels; convert to source-image pixels using the current layout scale
+    // so the baked text ends up the size it looked like while typing, at any zoom level. The app's own UI
+    // already renders in this font, so it's loaded - no need to await document.fonts.load() here.
+    const scale = R.layout ? R.srcW / R.layout.imgW : 1;
+    const size = Math.max(8, Math.round(fontSize * scale));
+    ctx.font = `700 ${size}px "Nunito Variable", "Segoe UI", sans-serif`;
+    ctx.fillStyle = textColor;
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    const lineHeight = size * 1.25;
+    value.split("\n").forEach((line, i) => ctx.fillText(line, draft.sx, draft.sy + i * lineHeight));
+    R.pixels = ctx.getImageData(0, 0, R.srcW, R.srcH);
+    sounds.play("redact.swish");
+    schedule();
+    committingText.current = false;
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
-    if (tool === "none") return;
+    if (tool === "text") {
+      const p = toSource(e);
+      const wrap = wrapRef.current;
+      if (!p || !wrap) return;
+      const wr = wrap.getBoundingClientRect();
+      setTextDraft({ sx: p.x, sy: p.y, left: e.clientX - wr.left, top: e.clientY - wr.top, value: "" });
+      return;
+    }
+    if (tool === "none") {
+      if (zoomRef.current <= MIN_ZOOM) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      panDragRef.current = { startClientX: e.clientX, startClientY: e.clientY, startPan: { ...panRef.current } };
+      return;
+    }
     const p = toSource(e);
     if (!p) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -488,7 +622,15 @@ export default function Editor() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (tool === "none") return;
+    if (tool === "none") {
+      const drag = panDragRef.current;
+      if (!drag) return;
+      const next = clampPan(zoomRef.current, { x: drag.startPan.x + (e.clientX - drag.startClientX), y: drag.startPan.y + (e.clientY - drag.startClientY) });
+      panRef.current = next;
+      if (viewRef.current) viewRef.current.style.transform = `translate(${next.x}px, ${next.y}px)`;
+      return;
+    }
+    if (tool === "text") return;
     const p = toSource(e);
     if (!p) return;
     if (tool === "box" && R.boxRect) {
@@ -510,6 +652,10 @@ export default function Editor() {
   };
 
   const onPointerUp = () => {
+    if (tool === "none") {
+      panDragRef.current = null;
+      return;
+    }
     if (tool === "box" && R.boxRect && R.pixels && R.src) {
       const b = R.boxRect;
       fillRect(R.pixels, { x: Math.min(b.x0, b.x1), y: Math.min(b.y0, b.y1), w: Math.abs(b.x1 - b.x0), h: Math.abs(b.y1 - b.y0) });
@@ -569,9 +715,13 @@ export default function Editor() {
       ? "Fluffed up and copied!"
       : tool === "highlight"
         ? "Drag to highlight. It's baked into the pixels."
-        : tool !== "none"
-          ? "Drag over anything private. It's baked into the pixels."
-          : null);
+        : tool === "text"
+          ? "Click anywhere to type."
+          : tool === "none" && zoom > 1
+            ? "Drag to look around."
+            : tool !== "none"
+              ? "Drag over anything private. It's baked into the pixels."
+              : null);
 
   return (
     <div
@@ -594,6 +744,33 @@ export default function Editor() {
         </div>
       </TitleBar>
 
+      {hasImage && (
+        <motion.div
+          initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.24, ease: "easeOut" }}
+          className="absolute left-4 z-20 flex justify-center transition-[right] duration-300 ease-out"
+          style={{ top: TITLEBAR_H + 8, right: INSPECTOR_W + 28 }}
+        >
+          <div className="glass flex h-9 items-center gap-0.5 rounded-full px-1.5">
+            <IconButton title="Zoom out" onClick={() => setZoom(zoomRef.current - ZOOM_STEP)} disabled={zoom <= MIN_ZOOM}>
+              <ZoomOut size={16} strokeWidth={2.1} />
+            </IconButton>
+            <button
+              title="Reset zoom"
+              onClick={resetView}
+              disabled={zoom <= MIN_ZOOM}
+              className="min-w-12 rounded-full px-1 text-center text-[12px] font-bold tabular-nums text-ink-soft transition-colors enabled:hover:bg-fill-hover enabled:hover:text-ink disabled:opacity-50"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <IconButton title="Zoom in" onClick={() => setZoom(zoomRef.current + ZOOM_STEP)} disabled={zoom >= MAX_ZOOM}>
+              <ZoomIn size={16} strokeWidth={2.1} />
+            </IconButton>
+          </div>
+        </motion.div>
+      )}
+
       <div
         ref={stageRef}
         className="absolute left-4 flex items-center justify-center transition-[right] duration-300 ease-out"
@@ -604,16 +781,46 @@ export default function Editor() {
             initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.24, ease: "easeOut" }}
-            className="relative"
+            ref={wrapRef}
+            className="relative flex items-center justify-center overflow-hidden"
           >
-            <canvas
-              ref={canvasRef}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              className={`block rounded-md ${bg.kind === "transparent" ? "checker" : "shadow-[0_0_0_0.5px_rgba(0,0,0,0.06),0_18px_50px_-18px_rgba(20,10,40,0.35)]"}`}
-              style={{ cursor: tool === "none" ? "default" : "crosshair", touchAction: "none" }}
-            />
+            <div ref={viewRef} className="relative">
+              <canvas
+                ref={canvasRef}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                className={`block rounded-md ${bg.kind === "transparent" ? "checker" : "shadow-[0_0_0_0.5px_rgba(0,0,0,0.06),0_18px_50px_-18px_rgba(20,10,40,0.35)]"}`}
+                style={{
+                  cursor: tool === "text" ? "text" : tool === "none" ? (zoom > 1 ? "grab" : "default") : "crosshair",
+                  touchAction: "none",
+                }}
+              />
+            </div>
+            {textDraft && (
+              <input
+                ref={textInputRef}
+                autoFocus
+                type="text"
+                value={textDraft.value}
+                onChange={(e) => setTextDraft({ ...textDraft, value: e.target.value })}
+                onBlur={() => void commitText()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void commitText(); }
+                  else if (e.key === "Escape") { e.preventDefault(); setTextDraft(null); }
+                  e.stopPropagation();
+                }}
+                placeholder="Type something…"
+                className="absolute z-10 rounded-md border-2 border-dashed border-accent bg-white/90 px-1.5 py-0.5 font-bold outline-none"
+                style={{
+                  left: textDraft.left,
+                  top: textDraft.top,
+                  fontSize: fontSize * zoom,
+                  color: textColor,
+                  minWidth: 40,
+                }}
+              />
+            )}
           </motion.div>
         ) : (
           <div className="flex max-w-sm flex-col items-center text-center">
@@ -678,6 +885,7 @@ export default function Editor() {
                     ["pixelate", "Pixelate brush", Grid2x2],
                     ["box", "Redaction box", Square],
                     ["highlight", "Highlighter", Highlighter],
+                    ...(TEXT_TOOL_ENABLED ? ([["text", "Add text", Type]] as const) : []),
                   ] as const).map(([id, label, Icon]) => (
                     <button
                       key={id}
@@ -728,6 +936,48 @@ export default function Editor() {
                           title={c.name}
                           onClick={() => setHighlightColor(c.hex)}
                           className={`h-3 w-3 shrink-0 rounded-full transition-transform duration-150 ${highlightColor === c.hex ? "scale-100 ring-2 ring-accent ring-offset-2 ring-offset-surface" : "scale-90 hover:scale-100"}`}
+                          style={{ background: c.hex }}
+                        />
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {tool === "text" && (
+                    <motion.label
+                      key="font-size"
+                      initial={{ width: 0, opacity: 0 }}
+                      animate={{ width: 112, opacity: 1 }}
+                      exit={{ width: 0, opacity: 0 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                      className="flex items-center overflow-hidden px-1"
+                      title="Text size"
+                    >
+                      <input type="range" aria-label="Text size" min={12} max={72} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="slider" style={{ "--p": `${((fontSize - 12) / 60) * 100}%` } as React.CSSProperties} />
+                    </motion.label>
+                  )}
+                </AnimatePresence>
+                <AnimatePresence initial={false}>
+                  {tool === "text" && (
+                    <motion.div
+                      key="text-colors"
+                      initial={{ width: 0, opacity: 0 }}
+                      animate={{ width: "auto", opacity: 1 }}
+                      exit={{ width: 0, opacity: 0 }}
+                      transition={{ duration: 0.18, ease: "easeOut" }}
+                      role="radiogroup"
+                      aria-label="Text colour"
+                      className="flex items-center gap-1.5 pr-1"
+                    >
+                      {TEXT_COLORS.map((c) => (
+                        <button
+                          key={c.hex}
+                          role="radio"
+                          aria-checked={textColor === c.hex}
+                          aria-label={c.name}
+                          title={c.name}
+                          onClick={() => setTextColor(c.hex)}
+                          className={`h-3 w-3 shrink-0 rounded-full ring-1 ring-inset ring-black/10 transition-transform duration-150 ${textColor === c.hex ? "scale-100 ring-2 ring-accent ring-offset-2 ring-offset-surface" : "scale-90 hover:scale-100"}`}
                           style={{ background: c.hex }}
                         />
                       ))}

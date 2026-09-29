@@ -18,8 +18,6 @@ public sealed partial class ToastWindow : Window
 {
     private const int WidthDip = 380, HeightDip = 96, MarginDip = 16;
 
-    private const int SystemToastClearanceDip = 118;
-
     private readonly PendingImage _image;
     private readonly DispatcherQueueTimer _timer;
     private readonly bool _animate = new UISettings().AnimationsEnabled;
@@ -72,8 +70,7 @@ public sealed partial class ToastWindow : Window
         var area = DisplayArea.GetFromPoint(new PointInt32(cursor.X, cursor.Y), DisplayAreaFallback.Nearest).WorkArea;
         var scale = Win32.GetDpiForWindow(hwnd) / 96.0;
         int w = (int)(WidthDip * scale), h = (int)(HeightDip * scale), m = (int)(MarginDip * scale);
-        int clearance = (int)(SystemToastClearanceDip * scale);
-        AppWindow.MoveAndResize(new RectInt32(area.X + area.Width - w - m, area.Y + area.Height - h - m - clearance, w, h));
+        AppWindow.MoveAndResize(new RectInt32(area.X + area.Width - w - m, area.Y + area.Height - h - m, w, h));
     }
 
     internal void ShowToast()

@@ -52,6 +52,14 @@ internal sealed class WebWindow : Window
         var w = Math.Min((int)(width * scale), area.Width - 40);
         var h = Math.Min((int)(height * scale), area.Height - 40);
         AppWindow.MoveAndResize(new RectInt32(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h));
+
+        // The editor's bottom toolbar (tools, undo, save, copy) and side panel need a floor below which
+        // they'd start clipping - stop the user from resizing past that instead of letting the UI break.
+        if (isEditor && AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = (int)(1200 * scale);
+            presenter.PreferredMinimumHeight = (int)(600 * scale);
+        }
         var icon = AppPaths.Asset("feathershot.ico");
         if (System.IO.File.Exists(icon)) AppWindow.SetIcon(icon);
 
