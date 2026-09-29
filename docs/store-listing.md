@@ -121,7 +121,8 @@ That should land the lowest rating tier in every ratings board (e.g. ESRB Everyo
 
 ## Still needs a real value before submission
 
-- `STORE_URL` and `CONTACT_EMAIL` in `feathershot-marketing/lib/constants.ts` are placeholders
+- `STORE_URL` is now live: `https://apps.microsoft.com/detail/9NT86PWCRC0P`.
+- `CONTACT_EMAIL` and `SITE_URL` in `feathershot-marketing/lib/constants.ts` are still placeholders
   (`feathershotapp.com` domain isn't registered yet, as far as I know) - once you pick a real domain and
   contact address, update them there and the whole site + this listing stay in sync.
 - The 5 screenshots in `docs/store-screenshots/` use a VS Code window as stand-in content. Worth

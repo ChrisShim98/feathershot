@@ -73,11 +73,9 @@ function render(w, h, { bg, scale, rounded = 0 }) {
   const px = Buffer.alloc(w * h * 4);
   const size = h * scale;
   const ox = (w - size) / 2, oy = (h - size) / 2 + (bg ? h * 0.02 : 0);
-  // The bird's own body is teal-to-violet, which the Plumage background also passes through — wherever
-  // the icon centers on that stretch of the gradient, bird-on-background contrast collapses. A soft light
-  // halo behind the bird (like a subject light in a photo) guarantees separation regardless of which part
-  // of the gradient lands there, without giving up the gradient look everywhere else.
-  const haloCx = ox + size * 0.5, haloCy = oy + size * 0.55, haloR = size * 0.66;
+  // A soft Plumage glow behind the bird, fading out to white toward the tile's edges - reads as
+  // a clean, airy app icon (matching the marketing site's hero art) instead of a bold gradient tile.
+  const glowCx = ox + size * 0.5, glowCy = oy + size * 0.55, glowR = Math.max(w, h) * 0.62;
   const SS = 4;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -88,13 +86,10 @@ function render(w, h, { bg, scale, rounded = 0 }) {
           let col = [0, 0, 0], alpha = 0;
           const inBg = bg && (!rounded || roundedHit(fx, fy, w, h, rounded));
           if (inBg) {
-            col = plumage(fx / w, fy / h);
+            const d = Math.min(1, Math.hypot(fx - glowCx, fy - glowCy) / glowR);
+            const t = (1 - d) ** 1.6;
+            col = mix([255, 255, 255], plumage(fx / w, fy / h), t * 0.85);
             alpha = 1;
-            const hd = Math.hypot(fx - haloCx, fy - haloCy) / haloR;
-            if (hd < 1) {
-              const t = 1 - hd;
-              col = mix(col, [255, 255, 255], t * t * 0.72);
-            }
           }
           const bx = ((fx - ox) / size) * 100, by = ((fy - oy) / size) * 100;
           if (bx >= 0 && bx <= 100 && by >= 0 && by <= 100) {
